@@ -4,6 +4,33 @@ Forge is a profile-guided just-in-time compiler for LLM decode kernels. It profi
 
 The project focuses on the decode phase of LLM inference, where generation happens one token at a time and performance is often limited by memory bandwidth rather than raw compute throughput.
 
+## Current Prototype Status
+
+The repository now includes a small Python prototype of the Forge control plane:
+
+```text
+runtime profiler
+deterministic autotuner
+JSON kernel cache
+step-boundary hot-swap manager
+serving-loop simulation
+basic tests
+```
+
+The current kernel is a simulated decode-attention kernel, not a real Triton/CUDA implementation yet. This lets the architecture run on a normal development machine before adding GPU-specific code.
+
+Run the demo:
+
+```bash
+python3 scripts/run_server.py
+```
+
+Run tests:
+
+```bash
+python3 -m pytest
+```
+
 ---
 
 ## Table of Contents

@@ -1,0 +1,7 @@
+model_config_hash: toy_llm_head128
+profiler:
+  window_size: 16
+autotuner:
+  candidate_limit: 8
+serving:
+  tune_every_steps: 8
