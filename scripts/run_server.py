@@ -30,6 +30,7 @@ def main(config_path: str | Path | None = None) -> None:
         autotuner=Autotuner(candidate_limit=config.autotuner_candidate_limit),
         cache=cache,
         tune_every_steps=config.tune_every_steps,
+        minimum_speedup_percent=config.minimum_speedup_percent,
     ) as loop:
         for batch_size, seq_len in workload:
             result = loop.decode_step(batch_size=batch_size, seq_len=seq_len)

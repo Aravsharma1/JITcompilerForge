@@ -13,6 +13,7 @@ from forge.kernels.decode_attention import compile_decode_kernel
 from forge.kernels.kernel_configs import DEFAULT_KERNEL_CONFIG
 from forge.profiler.profiler import DecodeStepMetrics, RuntimeProfiler
 from forge.profiler.workload_spec import WorkloadSpec
+from forge.utils.buckets import bucket_midpoint
 
 
 @dataclass(frozen=True)
@@ -33,18 +34,23 @@ class ServingLoop:
         autotuner: Autotuner,
         cache: KernelCache,
         tune_every_steps: int = 8,
+        minimum_speedup_percent: float = 0.0,
     ) -> None:
+        if minimum_speedup_percent < 0:
+            raise ValueError("minimum_speedup_percent must be non-negative")
         default_kernel = compile_decode_kernel(DEFAULT_KERNEL_CONFIG)
         self.profiler = profiler
         self.autotuner = autotuner
         self.cache = cache
         self.tune_every_steps = tune_every_steps
+        self.minimum_speedup_percent = minimum_speedup_percent
         self.swap_manager = SwapManager(active_kernel=default_kernel)
         self.step = 0
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="forge-tuner")
         self._tuning_job: Future[TuningResult] | None = None
         self._tuning_spec: WorkloadSpec | None = None
         self.last_tuning_error: Exception | None = None
+        self.last_candidate_speedup_percent: float | None = None
 
     def decode_step(self, batch_size: int, seq_len: int) -> DecodeStepResult:
         self.step += 1
@@ -137,7 +143,21 @@ class ServingLoop:
             self._stage_result(spec, result)
 
     def _stage_result(self, spec: WorkloadSpec, result: TuningResult) -> None:
-        if result.validated:
-            kernel = compile_decode_kernel(result.config, spec)
-            if kernel != self.swap_manager.active_kernel:
-                self.swap_manager.stage(kernel)
+        if not result.validated:
+            return
+
+        batch_size = bucket_midpoint(spec.batch_size_bucket)
+        seq_len = bucket_midpoint(spec.seq_len_bucket)
+        active_latency = self.swap_manager.active_kernel.estimate_latency_ms(
+            batch_size, seq_len
+        )
+        self.last_candidate_speedup_percent = (
+            (active_latency - result.latency_ms) / active_latency
+        ) * 100.0
+
+        if self.last_candidate_speedup_percent < self.minimum_speedup_percent:
+            return
+
+        kernel = compile_decode_kernel(result.config, spec)
+        if kernel != self.swap_manager.active_kernel:
+            self.swap_manager.stage(kernel)

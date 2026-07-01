@@ -23,6 +23,11 @@ Autotuning runs on a dedicated worker thread. The serving loop polls completed
 jobs between decode steps, stages validated results, and activates them only at
 a step boundary. Only one tuning search may be in flight at a time.
 
+Before staging a candidate, Forge compares its benchmark latency with the active
+kernel at the representative workload bucket. The
+`serving.minimum_speedup_percent` setting prevents slower or marginal variants
+from being hot-swapped.
+
 Run the demo:
 
 ```bash

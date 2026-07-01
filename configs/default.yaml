@@ -5,3 +5,4 @@ autotuner:
   candidate_limit: 8
 serving:
   tune_every_steps: 8
+  minimum_speedup_percent: 2.0

@@ -17,6 +17,7 @@ class ForgeConfig:
     profiler_window_size: int
     autotuner_candidate_limit: int
     tune_every_steps: int
+    minimum_speedup_percent: float
 
 
 def load_config(path: str | Path) -> ForgeConfig:
@@ -37,6 +38,9 @@ def load_config(path: str | Path) -> ForgeConfig:
         profiler_window_size=_positive_integer(profiler, "window_size"),
         autotuner_candidate_limit=_positive_integer(autotuner, "candidate_limit"),
         tune_every_steps=_positive_integer(serving, "tune_every_steps"),
+        minimum_speedup_percent=_nonnegative_number(
+            serving, "minimum_speedup_percent", default=0.0
+        ),
     )
 
 
@@ -59,3 +63,12 @@ def _positive_integer(config: dict[str, Any], key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{key} must be a positive integer")
     return value
+
+
+def _nonnegative_number(
+    config: dict[str, Any], key: str, default: float
+) -> float:
+    value = config.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{key} must be a non-negative number")
+    return float(value)

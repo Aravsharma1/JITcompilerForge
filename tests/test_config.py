@@ -16,6 +16,7 @@ autotuner:
   candidate_limit: 4
 serving:
   tune_every_steps: 6
+  minimum_speedup_percent: 3.5
 """.strip()
     )
 
@@ -25,6 +26,7 @@ serving:
     assert config.profiler_window_size == 12
     assert config.autotuner_candidate_limit == 4
     assert config.tune_every_steps == 6
+    assert config.minimum_speedup_percent == 3.5
 
 
 def test_load_config_rejects_invalid_positive_integer(tmp_path: Path) -> None:

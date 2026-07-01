@@ -1,8 +1,10 @@
 from threading import Event
 from pathlib import Path
 
+from forge.autotuner.candidate import TuningResult
 from forge.autotuner.tuner import Autotuner
 from forge.cache.kernel_cache import KernelCache
+from forge.kernels.kernel_configs import KernelConfig
 from forge.profiler.profiler import RuntimeProfiler
 from forge.serving.loop import ServingLoop
 
@@ -62,4 +64,34 @@ def test_decode_continues_while_tuning_runs_in_background(tmp_path: Path) -> Non
 
     release.set()
     assert loop.wait_for_tuning(timeout=1.0)
+    loop.close()
+
+
+class RegressingAutotuner(Autotuner):
+    def tune(self, spec):
+        return TuningResult(
+            config=KernelConfig(8, 32, 64, 4, 3),
+            latency_ms=10.0,
+            tokens_per_sec=100.0,
+        )
+
+
+def test_serving_loop_rejects_kernel_below_speedup_threshold(
+    tmp_path: Path,
+) -> None:
+    loop = ServingLoop(
+        profiler=RuntimeProfiler(model_config_hash="toy", window_size=1),
+        autotuner=RegressingAutotuner(),
+        cache=KernelCache(tmp_path / "cache.json"),
+        tune_every_steps=1,
+        minimum_speedup_percent=2.0,
+    )
+
+    result = loop.decode_step(batch_size=1, seq_len=128)
+
+    assert result.swapped is False
+    assert loop.wait_for_tuning(timeout=1.0) is False
+    assert loop.last_candidate_speedup_percent is not None
+    assert loop.last_candidate_speedup_percent < 2.0
+    assert loop.swap_manager.staging_kernel is None
     loop.close()
