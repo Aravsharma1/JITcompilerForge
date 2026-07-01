@@ -29,6 +29,12 @@ Run the demo:
 python3 scripts/run_server.py
 ```
 
+Use a different runtime configuration:
+
+```bash
+python3 scripts/run_server.py --config configs/default.yaml
+```
+
 Run tests:
 
 ```bash

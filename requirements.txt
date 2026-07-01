@@ -1,4 +1,4 @@
-# Runtime prototype uses only the Python standard library.
+PyYAML>=6.0
 
 # Developer/test dependency:
 pytest>=8.0
