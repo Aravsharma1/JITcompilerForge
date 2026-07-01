@@ -10,7 +10,7 @@ The repository now includes a small Python prototype of the Forge control plane:
 
 ```text
 runtime profiler
-deterministic autotuner
+background deterministic autotuner
 JSON kernel cache
 step-boundary hot-swap manager
 serving-loop simulation
@@ -18,6 +18,10 @@ basic tests
 ```
 
 The current kernel is a simulated decode-attention kernel, not a real Triton/CUDA implementation yet. This lets the architecture run on a normal development machine before adding GPU-specific code.
+
+Autotuning runs on a dedicated worker thread. The serving loop polls completed
+jobs between decode steps, stages validated results, and activates them only at
+a step boundary. Only one tuning search may be in flight at a time.
 
 Run the demo:
 
