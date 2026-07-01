@@ -8,8 +8,8 @@ plain language first, then maps each idea to the code in this repository.
 
 ## 1. The Basic LLM Flow
 
-An LLM does not directly work with words. The prompt is converted into numbers,
-then the runtime executes the model's math on those numbers.
+An LLM does not directly calculate with words. A tokenizer converts the prompt
+into numbers, and an LLM-serving program coordinates the remaining work.
 
 ```text
 User prompt
@@ -18,19 +18,22 @@ User prompt
 Tokenizer
     |
     v
-Token IDs
+Token IDs (one number for each text piece)
     |
     v
-Tensors
+Tensors (arrays containing numbers)
     |
     v
-Runtime executes model calculations
+LLM-serving program launches many GPU kernels
     |
     v
-Scores for possible next tokens
+GPU kernels calculate with tensors and model weights
     |
     v
-Chosen next token
+Final tensor containing one score per possible next token
+    |
+    v
+LLM-serving program chooses one token using those scores
     |
     v
 Text output
@@ -41,16 +44,58 @@ Important terms:
 - **Tokenizer**: turns text into token IDs.
 - **Token ID**: a number representing a piece of text.
 - **Tensor**: an array of numbers used by the model.
-- **Model**: the learned weights plus the structure of the calculations.
-- **Runtime**: the software that executes the model.
+- **Model weights**: billions of learned numbers stored by the LLM.
+- **Model structure**: instructions that define which calculations must happen.
+- **Model**: the model weights plus the model structure.
+- **LLM-serving program**: software such as PyTorch or vLLM that coordinates
+  tokenization, tensors, GPU kernel launches, and token selection.
 - **GPU kernel**: a small compiled program that runs on the GPU.
 
-The model itself does not launch GPU kernels. The runtime executes the model,
-and the runtime launches GPU kernels to do the heavy tensor calculations.
+### What "model calculations" means
+
+Model calculations are calculations performed on tensors.
+
+```text
+input tensors
+    +
+model weights
+    |
+    v
+GPU kernels perform calculations
+    |
+    v
+new tensors
+```
+
+These calculations repeatedly combine and transform arrays of numbers. Many GPU
+kernels are needed for one pass through the LLM.
+
+The model is not a program independently controlling the computer. The
+LLM-serving program follows the model structure and launches the required GPU
+kernels. The GPU kernels perform the actual tensor calculations on GPU hardware.
+
+The responsibilities are:
+
+```text
+Tokenizer:
+turns text into token IDs
+
+LLM-serving program:
+controls the overall process and launches GPU kernels
+
+GPU:
+physical hardware that performs calculations
+
+GPU kernels:
+small programs that perform specific tensor calculations
+
+Model weights:
+learned numbers used by those calculations
+```
 
 ## 2. Input, Output, And Next-Token Prediction
 
-The model generates text one token at a time.
+The LLM generates its response one token at a time.
 
 ```text
 Prompt:
@@ -66,26 +111,62 @@ Next-token prediction:
 " the"
 ```
 
-The model is not usually predicting the next token inside the original input.
-During response generation, it predicts the next token in the output, using both:
+It is not predicting a missing token inside the original prompt. During response
+generation, it predicts the next token in the output using both:
 
 ```text
 original prompt + output generated so far
 ```
 
-The repeated loop looks like this:
+### What are next-token scores?
+
+Suppose the tokenizer knows 50,000 possible tokens. After the GPU kernels finish
+the model calculations, the final tensor contains roughly one score for each
+possible token.
 
 ```text
-context so far
+Possible token     Score
+
+" the"             12.8
+" a"               10.1
+"."                 8.4
+" running"          2.2
+" banana"          -3.5
+```
+
+A higher score means that the model considers that token a better continuation
+of the current text.
+
+The GPU kernels produce this final score tensor by calculating with:
+
+```text
+original prompt information
++
+generated output information
++
+model weights
+```
+
+The LLM-serving program then uses the scores to select one token. It may select
+the highest-scoring token, or randomly select while giving higher-scoring tokens
+a greater chance.
+
+The complete repeated loop is:
+
+```text
+original prompt + output generated so far
     |
     v
-runtime executes model
+LLM-serving program launches GPU kernels
     |
     v
-scores for possible next tokens
+GPU kernels perform tensor calculations
     |
     v
-choose one token
+final tensor contains possible-token scores
+    |
+    v
+LLM-serving program chooses one token
     |
     v
 append token to output
@@ -111,26 +192,40 @@ LLM inference has two main phases.
 
 ### Prefill
 
-Prefill processes the prompt.
+Prefill processes all tokens in the user's prompt.
 
 ```text
-User prompt:
-"Explain gravity simply."
-
-Prefill:
-process all prompt tokens
-build internal saved information
+1. Tokenizer converts the entire prompt into token IDs.
+2. Token IDs are turned into tensors.
+3. The LLM-serving program launches GPU kernels.
+4. GPU kernels process all prompt tokens.
+5. KV-cache information is created for all prompt tokens.
+6. Scores for the first output token are produced.
+7. The LLM-serving program chooses the first output token.
 ```
+
+Yes: the KV cache is initially filled during prefill.
 
 ### Decode
 
-Decode generates the answer one token at a time.
+Decode generates the remaining answer one token at a time.
 
 ```text
-Step 1: generate "Gravity"
-Step 2: generate " is"
-Step 3: generate " the"
-Step 4: generate " force"
+1. Process the newest generated token.
+2. Read previous-token information from the KV cache.
+3. Launch GPU kernels that perform tensor calculations.
+4. Produce scores for the next possible token.
+5. Choose one token.
+6. Add KV-cache information for that new token.
+7. Repeat.
+```
+
+The KV cache is therefore:
+
+```text
+initially filled with prompt information during prefill
++
+extended with one new token during every decode step
 ```
 
 Forge focuses on the decode phase.
@@ -138,17 +233,23 @@ Forge focuses on the decode phase.
 ## 4. The KV Cache
 
 During generation, the model needs information from previous tokens. Recomputing
-all previous-token information every time would be slow, so the runtime stores
-some of it in the KV cache.
+all previous-token information every time would be slow, so the LLM-serving
+program keeps some of it in GPU memory as the KV cache.
 
 ```text
-Previous tokens
+Prefill processes prompt tokens
     |
     v
-Saved internal number data
+KV cache is initially filled
     |
     v
-KV cache
+Decode generates one token
+    |
+    v
+KV cache is extended for that token
+    |
+    v
+Repeat for every generated token
 ```
 
 KV means:
@@ -165,16 +266,17 @@ KV cache = saved previous-token information
 ```
 
 During each decode step, GPU kernels read from the KV cache to help predict the
-next token.
+next token. They also produce the new information that gets added to the cache.
 
 ```text
 current token information
         |
         v
-decode attention kernel <---- KV cache from previous tokens
+decode attention GPU kernel <---- existing KV cache
         |
-        v
-new tensor used for next-token prediction
+        +----> tensor used for next-token prediction
+        |
+        +----> new token information added to KV cache
 ```
 
 As the prompt and generated answer get longer, the KV cache gets larger. Reading
@@ -185,7 +287,7 @@ and processing that saved data can become a major cost during decode.
 A GPU is the hardware. A GPU kernel is a small program running on that hardware.
 
 ```text
-Runtime
+LLM-serving program
   |
   | launches
   v
@@ -211,6 +313,21 @@ many GPU kernel launches per step
 
 Forge is interested in decode attention kernels, especially the ones that use
 the KV cache.
+
+The model does not launch kernels. The exact relationship is:
+
+```text
+model structure says which calculations are required
+        |
+        v
+LLM-serving program follows those instructions
+        |
+        v
+LLM-serving program launches GPU kernels
+        |
+        v
+GPU kernels calculate with tensors and model weights
+```
 
 ## 6. What Forge Is Trying To Do
 
@@ -269,8 +386,8 @@ This is called profile-guided JIT compilation:
                                         |
                                         v
                              +----------------------+
-                             | LLM server/runtime   |
-                             | tokenize, batch, run |
+                             | LLM-serving program  |
+                             | tokenize and control |
                              +----------+-----------+
                                         |
                                         v
@@ -290,10 +407,16 @@ This is called profile-guided JIT compilation:
                                         v
                              +----------------------+
                              | Next-token scores    |
+                             +----------+-----------+
+                                        |
+                                        v
+                             +----------------------+
+                             | Serving program      |
+                             | chooses next token   |
                              +----------------------+
 
 
-     Runtime metrics
+     Decode-step metrics
           |
           v
 +-------------------+     workload spec      +-------------------+
@@ -351,7 +474,7 @@ forge/
 
 ## 9. Component Breakdown
 
-### 9.1 Runtime Profiler
+### 9.1 Decode Workload Profiler
 
 Code:
 
@@ -702,7 +825,7 @@ Not real yet:
 ```text
 actual Triton kernel
 actual CUDA/GPU execution
-real LLM inference runtime
+real LLM-serving program integration
 real KV-cache tensors
 real GPU benchmarking
 ```
@@ -717,14 +840,21 @@ Keep this version in your head:
 ```text
 LLM generation means predicting one next token at a time.
 
-The runtime executes the model using tensors.
+The model is learned weights plus instructions for tensor calculations.
 
-The GPU runs small programs called kernels to process those tensors.
+The LLM-serving program follows those instructions and launches GPU kernels.
 
-During decode, some kernels repeatedly use the KV cache.
+GPU kernels perform calculations on tensors using the model weights.
+
+Prefill processes the prompt, fills the initial KV cache, and produces scores
+for the first output token.
+
+Decode produces later output tokens one at a time. During every decode step,
+GPU kernels read the KV cache and add information for the newly generated token.
+
+The LLM-serving program chooses each token from the final score tensor.
 
 Forge watches the decode workload and chooses better kernel settings.
 
 The better kernel is cached and safely swapped into the serving loop.
 ```
-
